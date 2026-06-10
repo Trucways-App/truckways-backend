@@ -33,19 +33,41 @@ export class TypeOrmConfigService implements TypeOrmOptionsFactory {
     return String(value).toLowerCase() === 'true';
   }
 
+  private parsePort(value: unknown, defaultValue = 5432): number {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : defaultValue;
+  }
+
+  private buildSslConfig(sslEnabled: boolean) {
+    if (!sslEnabled) {
+      return undefined;
+    }
+
+    return {
+      rejectUnauthorized: this.parseBoolean(
+        this.configService.get('DATABASE_REJECT_UNAUTHORIZED'),
+        false,
+      ),
+      ca: this.configService.get('DATABASE_CA', { infer: true }) ?? undefined,
+      key: this.configService.get('DATABASE_KEY', { infer: true }) ?? undefined,
+      cert:
+        this.configService.get('DATABASE_CERT', { infer: true }) ?? undefined,
+    };
+  }
+
   createTypeOrmOptions(): TypeOrmModuleOptions {
+    const databaseUrl = this.configService.get<string>('DATABASE_URL');
     const sslEnabled = this.parseBoolean(
       this.configService.get('DATABASE_SSL_ENABLE') ??
         this.configService.get('DATABASE_SSL_ENABLED'),
+      Boolean(
+        databaseUrl?.includes('sslmode=require') ||
+          databaseUrl?.includes('render.com'),
+      ),
     );
+    const ssl = this.buildSslConfig(sslEnabled);
 
-    return {
-      type: this.configService.get('DATABASE_TYPE', { infer: true }),
-      host: this.configService.get('DATABASE_HOST', { infer: true }),
-      port: this.configService.get('DATABASE_PORT', { infer: true }),
-      username: this.configService.get('DATABASE_USERNAME', { infer: true }),
-      password: this.configService.get('DATABASE_PASSWORD', { infer: true }),
-      database: this.configService.get('DATABASE_NAME', { infer: true }),
+    const sharedOptions = {
       synchronize: this.parseBoolean(
         this.configService.get('DATABASE_SYNCHRONIZE'),
       ),
@@ -71,40 +93,39 @@ export class TypeOrmConfigService implements TypeOrmOptionsFactory {
         RidesEntity,
         PercentageConfigEntity,
         AnnouncementEntity,
-        RiderBidResponseEntity
-        
-      
+        RiderBidResponseEntity,
       ],
       migrations: [__dirname + '/migrations/**/*{.ts,.js}'],
       cli: {
         entitiesDir: 'src',
-
         subscribersDir: 'subscriber',
       },
       extra: {
-        // based on https://node-postgres.com/apis/pool
-        // max connection pool size
-        max: this.configService.get('DATABASE_MAX_CONNECTIONS', {
-          infer: true,
-        }),
-        ssl: sslEnabled
-          ? {
-              rejectUnauthorized: this.parseBoolean(
-                this.configService.get('DATABASE_REJECT_UNAUTHORIZED'),
-                true,
-              ),
-              ca:
-                this.configService.get('DATABASE_CA', { infer: true }) ??
-                undefined,
-              key:
-                this.configService.get('DATABASE_KEY', { infer: true }) ??
-                undefined,
-              cert:
-                this.configService.get('DATABASE_CERT', { infer: true }) ??
-                undefined,
-            }
-          : undefined,
+        max: this.parsePort(
+          this.configService.get('DATABASE_MAX_CONNECTIONS'),
+          100,
+        ),
+        ssl,
       },
+    };
+
+    if (databaseUrl) {
+      return {
+        type: 'postgres',
+        url: databaseUrl,
+        ssl,
+        ...sharedOptions,
+      } as TypeOrmModuleOptions;
+    }
+
+    return {
+      type: this.configService.get('DATABASE_TYPE', { infer: true }),
+      host: this.configService.get('DATABASE_HOST', { infer: true }),
+      port: this.parsePort(this.configService.get('DATABASE_PORT')),
+      username: this.configService.get('DATABASE_USERNAME', { infer: true }),
+      password: this.configService.get('DATABASE_PASSWORD', { infer: true }),
+      database: this.configService.get('DATABASE_NAME', { infer: true }),
+      ...sharedOptions,
     } as TypeOrmModuleOptions;
   }
 }
