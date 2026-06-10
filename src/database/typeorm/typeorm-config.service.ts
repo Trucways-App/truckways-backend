@@ -22,7 +22,23 @@ import { RiderBidResponseEntity } from 'src/Order/Infrastructure/Persistence/Rel
 @Injectable()
 export class TypeOrmConfigService implements TypeOrmOptionsFactory {
   constructor(private configService: ConfigService) {}
+
+  private parseBoolean(value: unknown, defaultValue = false): boolean {
+    if (value === undefined || value === null || value === '') {
+      return defaultValue;
+    }
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    return String(value).toLowerCase() === 'true';
+  }
+
   createTypeOrmOptions(): TypeOrmModuleOptions {
+    const sslEnabled = this.parseBoolean(
+      this.configService.get('DATABASE_SSL_ENABLE') ??
+        this.configService.get('DATABASE_SSL_ENABLED'),
+    );
+
     return {
       type: this.configService.get('DATABASE_TYPE', { infer: true }),
       host: this.configService.get('DATABASE_HOST', { infer: true }),
@@ -30,9 +46,9 @@ export class TypeOrmConfigService implements TypeOrmOptionsFactory {
       username: this.configService.get('DATABASE_USERNAME', { infer: true }),
       password: this.configService.get('DATABASE_PASSWORD', { infer: true }),
       database: this.configService.get('DATABASE_NAME', { infer: true }),
-      synchronize: this.configService.get('DATABASE_SYNCHRONIZE', {
-        infer: true,
-      }),
+      synchronize: this.parseBoolean(
+        this.configService.get('DATABASE_SYNCHRONIZE'),
+      ),
       dropSchema: false,
       keepConnectionAlive: true,
       logging:
@@ -71,11 +87,11 @@ export class TypeOrmConfigService implements TypeOrmOptionsFactory {
         max: this.configService.get('DATABASE_MAX_CONNECTIONS', {
           infer: true,
         }),
-        ssl: this.configService.get('DATABASE_SSL_ENABLE', { infer: true })
+        ssl: sslEnabled
           ? {
-              rejectUnauthorized: this.configService.get(
-                'DATABASE_REJECT_UNAUTHORIZED',
-                { infer: true },
+              rejectUnauthorized: this.parseBoolean(
+                this.configService.get('DATABASE_REJECT_UNAUTHORIZED'),
+                true,
               ),
               ca:
                 this.configService.get('DATABASE_CA', { infer: true }) ??
