@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { TypeOrmModuleOptions, TypeOrmOptionsFactory } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { NotificationsEntity } from 'src/utils/shared-entities/notification.entity';
@@ -21,6 +21,8 @@ import { RiderBidResponseEntity } from 'src/Order/Infrastructure/Persistence/Rel
 
 @Injectable()
 export class TypeOrmConfigService implements TypeOrmOptionsFactory {
+  private readonly logger = new Logger(TypeOrmConfigService.name);
+
   constructor(private configService: ConfigService) {}
 
   private parseBoolean(value: unknown, defaultValue = false): boolean {
@@ -55,17 +57,65 @@ export class TypeOrmConfigService implements TypeOrmOptionsFactory {
     };
   }
 
+  private resolveDatabaseUrl(): string | undefined {
+    return (
+      this.configService.get<string>('DATABASE_URL') ??
+      this.configService.get<string>('DATABASE_INTERNAL_URL')
+    );
+  }
+
+  private logConnectionTarget(
+    databaseUrl: string | undefined,
+    host: string | undefined,
+    port: number,
+    database: string | undefined,
+    sslEnabled: boolean,
+  ) {
+    if (databaseUrl) {
+      try {
+        const parsed = new URL(databaseUrl);
+        this.logger.log(
+          `Database: ${parsed.hostname}:${parsed.port || 5432}/${parsed.pathname.slice(1)} (via DATABASE_URL, ssl=${sslEnabled})`,
+        );
+      } catch {
+        this.logger.log(`Database: using DATABASE_URL (ssl=${sslEnabled})`);
+      }
+      return;
+    }
+
+    this.logger.log(
+      `Database: ${host ?? 'undefined'}:${port}/${database ?? 'undefined'} (ssl=${sslEnabled})`,
+    );
+
+    const nodeEnv = this.configService.get('app.nodeEnv', { infer: true });
+    if (
+      nodeEnv === 'production' &&
+      (!host || host === 'localhost' || host === '127.0.0.1')
+    ) {
+      this.logger.error(
+        'DATABASE_HOST is localhost or missing in production. On Render, link your Postgres database so DATABASE_URL is injected, or set DATABASE_HOST to the internal hostname from the Render dashboard.',
+      );
+    }
+  }
+
   createTypeOrmOptions(): TypeOrmModuleOptions {
-    const databaseUrl = this.configService.get<string>('DATABASE_URL');
+    const databaseUrl = this.resolveDatabaseUrl();
+    const host = this.configService.get<string>('DATABASE_HOST');
+    const port = this.parsePort(this.configService.get('DATABASE_PORT'));
+    const database = this.configService.get<string>('DATABASE_NAME');
     const sslEnabled = this.parseBoolean(
       this.configService.get('DATABASE_SSL_ENABLE') ??
         this.configService.get('DATABASE_SSL_ENABLED'),
       Boolean(
         databaseUrl?.includes('sslmode=require') ||
-          databaseUrl?.includes('render.com'),
+          databaseUrl?.includes('render.com') ||
+          host?.includes('dpg-') ||
+          host?.includes('render.com'),
       ),
     );
     const ssl = this.buildSslConfig(sslEnabled);
+
+    this.logConnectionTarget(databaseUrl, host, port, database, sslEnabled);
 
     const sharedOptions = {
       synchronize: this.parseBoolean(
@@ -120,11 +170,11 @@ export class TypeOrmConfigService implements TypeOrmOptionsFactory {
 
     return {
       type: this.configService.get('DATABASE_TYPE', { infer: true }),
-      host: this.configService.get('DATABASE_HOST', { infer: true }),
-      port: this.parsePort(this.configService.get('DATABASE_PORT')),
+      host,
+      port,
       username: this.configService.get('DATABASE_USERNAME', { infer: true }),
       password: this.configService.get('DATABASE_PASSWORD', { infer: true }),
-      database: this.configService.get('DATABASE_NAME', { infer: true }),
+      database,
       ...sharedOptions,
     } as TypeOrmModuleOptions;
   }
